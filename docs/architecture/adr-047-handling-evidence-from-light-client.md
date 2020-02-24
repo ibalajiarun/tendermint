@@ -2,6 +2,7 @@
 
 ## Changelog
 * 18-02-2020: Initial draft
+* 24-02-2020: Second version
 
 ## Context
 
@@ -19,8 +20,8 @@ full nodes it's connected to.
 
 ```go
 type ConflictingHeadersEvidence struct {
-  H1 *types.SignedHeader
-  H2 *types.SignedHeader
+  H1 types.SignedHeader
+  H2 types.SignedHeader
 }
 ```
 
@@ -33,57 +34,73 @@ slashable) or the fork accountability protocol needs to be started.
 Check both headers are valid (`ValidateBasic`), have
 the same height and signed by 1/3+ of known validator set.
 
-- Q: What if light client validator set is not equal to full node's validator set
-  (i.e. from full node's point of view both headers are not properly signed)
+- Q: What if light client validator set is not equal to full node's validator
+  set (i.e. from full node's point of view both headers are not properly signed;
+  this includes the case where none of the two headers were committed on the
+  main chain)
 
-  Reject the evidence. It means light client is following a fork, but, hey, at least it will halt.
+  Reject the evidence. It means light client is following a fork, but, hey, at
+  least it will halt.
 
 - Q: Don't we want to punish validators who signed something else even if they
   have less or equal than 1/3?
 
   No consensus so far. Ethan said no, Zarko said yes.
+  https://github.com/tendermint/spec/pull/71#discussion_r374210533
 
 ### Figuring out if malicious behaviour is immediately slashable
 
 Let's say H1 was committed on the main chain. Intersect validator sets of H1
 and H2.
 
-* if there are signers(H2) that are not part of signers(H1), they misbehaved as
+* if there are signers(H2) that are not part of validators(H1), they misbehaved as
 they are signing protocol messages in heights they are not validators =>
-immediately slashable.
+immediately slashable (#F4).
 
 * if `H1.Round == H2.Round`, and some signers signed different precommit
 messages in both commits, then it is an equivocation misbehavior => immediately
-slashable.
+slashable (#F1).
 
 * if `H1.Round != H2.Round` we need to run full detection procedure => not
-* immediately slashable.
+immediately slashable.
 
-Fork accountability specification defines 5 types of attacks.
+* if `ValidatorsHash`, `NextValidatorsHash`, `ConsensusHash`,
+`AppHash`, and `LastResultsHash` in H2 are different (incorrect application
+state transition), then it is a lunatic misbehavior => immediately slashable.
 
-We'll start with attacks on the light client:
+If evidence is not immediately slashable, fork accountability needs to invoked
+(ADR does not yet exist).
+
+It's unclear if we should further break up `ConflictingHeadersEvidence` or
+gossip and commit it directly. See
+https://github.com/tendermint/tendermint/issues/4182#issuecomment-590339233
+
+If we'd go with breaking evidence, here are the types we'll need:
+
+### F1. Equivocation
+
+Existing `DuplicateVoteEvidence` needs to be created and gossiped.
 
 ### F4. Phantom validators
 
-To punish this attack, we need support for a new Evidence type -
-`PhantomValidatorEvidence`.
+A new type of evidence needs to be created:
 
 ```go
 type PhantomValidatorEvidence struct {
-  Header types.Header
-  CommitSig types.CommitSig
+	PubKey crypto.PubKey
+  Vote types.Vote
 }
 ```
 
-Verifying evidence is easy - download validator set for height `Header.Height`
-and check that validator is not present.
+It contains a validator's public key and a vote for a block, where this
+validator is not part of the validator set.
 
 ### F5. Lunatic validator
 
 ```go
 type LunaticValidatorEvidence struct {
   Header types.Header
-  CommitSig types.CommitSig
+  Vote types.Vote
 }
 ```
 
@@ -133,7 +150,13 @@ Proposed.
 
 ### Positive
 
+* Tendermint will be able to detect & punish new types of misbehavior
+
 ### Negative
+
+* Accepting `ConflictingHeadersEvidence` from light clients opens up a DDOS
+attack vector (same is fair for any RPC endpoint open to public; remember that
+RPC is not open by default).
 
 ### Neutral
 
