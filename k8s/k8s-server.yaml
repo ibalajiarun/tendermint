@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tendermint-server
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+spec:
+  selector:
+    app: tendermint-server
+  ports:
+    - port: 9091
+      targetPort: 9091
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tendermint-server
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: tendermint-server
+  template:
+    metadata:
+      labels:
+        app: tendermint-server
+    spec:
+      # affinity:
+      #   podAntiAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       - labelSelector:
+      #           matchExpressions:
+      #             - key: app
+      #               operator: In
+      #               values:
+      #                 - libhotstuff-server
+      #         topologyKey: kubernetes.io/hostname
+      containers:
+        - name: tendermint-server
+          image: balajia/tendermint:latest
+          imagePullPolicy: Always
+          command:
+            - "/bin/sh"
+            - "-ecx"
+            # The use of qualified `hostname -f` is crucial:
+            # Other nodes aren't able to look up the unqualified hostname.
+          args:
+            - "./setup-server.sh && ./tendermint node --proxy_app=kvstore"
+          ports:
+            - containerPort: 7000
+          env:
+            - name: HOSTMACHINE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: REGION
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+      # No pre-stop hook is required, a SIGTERM plus some time is all that's
+      # needed for graceful shutdown of a node.
+      terminationGracePeriodSeconds: 10
+      hostAliases:
+        - ip: "198.82.148.41"
+          hostnames:
+            - "ssrg"
